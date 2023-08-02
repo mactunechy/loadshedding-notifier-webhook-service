@@ -8,14 +8,7 @@ import {
 } from "../shared/util";
 import axios from "axios";
 import { v4 as uuid } from "uuid";
-
-interface Schedule {
-  area_name: string;
-  stage: string;
-  start: string;
-  finsh: string;
-  source: string;
-}
+import { Schedule } from "../shared/types";
 
 const client = new SchedulerClient({ region: "us-west-2" });
 
@@ -26,7 +19,9 @@ export const handler = async (event: any) => {
     return createSchedule(event as Schedule, scheduleName);
   }
 
-  const areas: String[] = JSON.parse(process.env.scheduleGroups!);
+  const areas: String[] = event.areas
+    ? event.areas
+    : JSON.parse(process.env.scheduleGroups!);
 
   const schedules = await Promise.all(
     areas.map(async (area) => {
@@ -74,7 +69,7 @@ const createSchedule = async (
     Target: {
       Arn: process.env.targetArn,
       RoleArn: process.env.targetRoleArn,
-      Input: JSON.stringify(schedule),
+      Input: JSON.stringify({ ...schedule, scheduleName }),
     },
   });
 

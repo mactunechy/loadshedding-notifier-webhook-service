@@ -13,6 +13,7 @@ import {
 import { Group } from "@aws-cdk/aws-scheduler-alpha";
 import { Construct } from "constructs";
 import * as path from "path";
+import { RetentionDays } from "aws-cdk-lib/aws-logs";
 
 /**
  * These areas come from the {@link https://eskom-calendar-api.shuttleapp.rs/#/latest/list_all_areas} API
@@ -42,7 +43,7 @@ export class LoadsheddingStack extends Stack {
     super(scope, id, props);
 
     const sqsQueue = new sqs.Queue(this, "ScheduleQueue", {
-      visibilityTimeout: Duration.minutes(300),
+      visibilityTimeout: Duration.seconds(30),
       removalPolicy: RemovalPolicy.RETAIN,
     });
 
@@ -67,30 +68,19 @@ export class LoadsheddingStack extends Stack {
     // Attach the policy to the role
     schedulerRole.addToPolicy(sendMessageToSQSPolicy);
 
-    //Lambda is triggered with the schedule arrives and deletes the schedule from the table
-    const processScheduleLambda = new lambda_nodejs.NodejsFunction(
-      this,
-      "ProcessScheduleLambda",
-      {
-        runtime: lambda.Runtime.NODEJS_16_X,
-        memorySize: 1024,
-        timeout: Duration.seconds(5),
-        handler: "handler",
-        entry: path.join(__dirname, "/../lambda/execute/index.ts"),
-        environment: {
-          timezone: TimeZone.AFRICA_MAPUTO.timezoneName,
-        },
-      }
-    );
-
-    processScheduleLambda.addEventSource(
-      new event_sources.SqsEventSource(sqsQueue)
-    );
-
     // Create the IAM role for the  process schedule lambda function
     const scheduleLambdaRole = new iam.Role(this, "ScheduleLambdaRole", {
       assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
     });
+
+    // Create the IAM role for the  process schedule lambda function
+    const processScheduleLambdaRole = new iam.Role(
+      this,
+      "ProcessScheduleLambdaRole",
+      {
+        assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+      }
+    );
 
     // Add the required policies to the Lambda role
     scheduleLambdaRole.addManagedPolicy(
@@ -101,6 +91,12 @@ export class LoadsheddingStack extends Stack {
     scheduleLambdaRole.addToPolicy(
       new iam.PolicyStatement({
         actions: ["scheduler:CreateSchedule"],
+        resources: ["*"], // TODO: Replace '*' with the specific resource ARN
+      })
+    );
+    processScheduleLambdaRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["scheduler:DeleteSchedule", "scheduler:ListSchedules"],
         resources: ["*"], // TODO: Replace '*' with the specific resource ARN
       })
     );
@@ -134,7 +130,35 @@ export class LoadsheddingStack extends Stack {
           ),
         },
         role: scheduleLambdaRole,
+        logRetention: RetentionDays.ONE_WEEK,
       }
     );
+
+    //Lambda is triggered with the schedule arrives and deletes the schedule from the table
+    const processScheduleLambda = new lambda_nodejs.NodejsFunction(
+      this,
+      "ProcessScheduleLambda",
+      {
+        runtime: lambda.Runtime.NODEJS_16_X,
+        memorySize: 1024,
+        timeout: Duration.seconds(5),
+        handler: "handler",
+        entry: path.join(__dirname, "/../lambda/processSchedule/index.ts"),
+        environment: {
+          timezone: TimeZone.AFRICA_MAPUTO.timezoneName,
+          schedulerLambdaName: schedulerLambda.functionArn,
+        },
+        logRetention: RetentionDays.ONE_WEEK,
+        role: processScheduleLambdaRole,
+      }
+    );
+
+    processScheduleLambda.addEventSource(
+      new event_sources.SqsEventSource(sqsQueue, {
+        batchSize: 10,
+      })
+    );
+
+    schedulerLambda.grantInvoke(processScheduleLambda);
   }
 }
