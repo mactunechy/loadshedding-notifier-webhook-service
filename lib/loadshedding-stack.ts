@@ -8,6 +8,7 @@ import {
   TimeZone,
   aws_iam as iam,
   aws_sqs as sqs,
+  aws_dynamodb as dynamodb,
   RemovalPolicy,
 } from "aws-cdk-lib";
 import { Group } from "@aws-cdk/aws-scheduler-alpha";
@@ -41,6 +42,68 @@ const SUPPORTED_AREAS = [
 export class LoadsheddingStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
+
+    const subsribersTable = new dynamodb.Table(this, "SubscribersTable", {
+      partitionKey: {
+        name: "id",
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: RemovalPolicy.DESTROY,
+      stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
+    });
+
+    const AreaNameIndexName = "AreaNameIndex";
+    const EmailIndexName = "EmailIndex";
+
+    subsribersTable.addGlobalSecondaryIndex({
+      indexName: AreaNameIndexName,
+      partitionKey: {
+        name: "area_name",
+        type: dynamodb.AttributeType.STRING,
+      },
+
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    subsribersTable.addGlobalSecondaryIndex({
+      indexName: EmailIndexName,
+      partitionKey: {
+        name: "email",
+        type: dynamodb.AttributeType.STRING,
+      },
+
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const logsTable = new dynamodb.Table(this, "LogsTable", {
+      partitionKey: {
+        name: "id",
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: "timestamp",
+        type: dynamodb.AttributeType.STRING,
+      },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: RemovalPolicy.DESTROY,
+      stream: dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
+    });
+
+    const WebhookIndex = "WebhookIndex";
+
+    logsTable.addGlobalSecondaryIndex({
+      indexName: WebhookIndex,
+      partitionKey: {
+        name: "webhookUrl",
+        type: dynamodb.AttributeType.STRING,
+      },
+      sortKey: {
+        name: "timestamp",
+        type: dynamodb.AttributeType.STRING,
+      },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
 
     const sqsQueue = new sqs.Queue(this, "ScheduleQueue", {
       visibilityTimeout: Duration.seconds(30),
@@ -82,6 +145,12 @@ export class LoadsheddingStack extends Stack {
       }
     );
 
+    // Add the required policies to the Lambda role
+    processScheduleLambdaRole.addManagedPolicy(
+      iam.ManagedPolicy.fromAwsManagedPolicyName(
+        "service-role/AWSLambdaBasicExecutionRole"
+      )
+    );
     // Add the required policies to the Lambda role
     scheduleLambdaRole.addManagedPolicy(
       iam.ManagedPolicy.fromAwsManagedPolicyName(
@@ -141,23 +210,30 @@ export class LoadsheddingStack extends Stack {
       {
         runtime: lambda.Runtime.NODEJS_16_X,
         memorySize: 1024,
-        timeout: Duration.seconds(5),
+        timeout: Duration.seconds(30),
         handler: "handler",
         entry: path.join(__dirname, "/../lambda/processSchedule/index.ts"),
         environment: {
           timezone: TimeZone.AFRICA_MAPUTO.timezoneName,
           schedulerLambdaName: schedulerLambda.functionArn,
+          subsribersTableName: subsribersTable.tableName,
+          logsTableName: logsTable.tableName,
+          AreaNameIndexName,
         },
         logRetention: RetentionDays.ONE_WEEK,
         role: processScheduleLambdaRole,
+        retryAttempts: 0,
       }
     );
 
     processScheduleLambda.addEventSource(
       new event_sources.SqsEventSource(sqsQueue, {
-        batchSize: 10,
+        batchSize: 1,
       })
     );
+
+    subsribersTable.grantReadData(processScheduleLambda);
+    logsTable.grantReadWriteData(processScheduleLambda);
 
     schedulerLambda.grantInvoke(processScheduleLambda);
   }

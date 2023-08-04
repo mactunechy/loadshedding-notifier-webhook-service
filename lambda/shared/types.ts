@@ -6,3 +6,9 @@ export interface Schedule {
   source: string;
   scheduleName?: string;
 }
+
+export interface Subscriber {
+  area_name: string;
+  email: string;
+  webhookUrl: string;
+}

@@ -1,4 +1,5 @@
 import {
+  ActionAfterCompletion,
   CreateScheduleCommand,
   SchedulerClient,
 } from "@aws-sdk/client-scheduler";
@@ -10,9 +11,11 @@ import axios from "axios";
 import { v4 as uuid } from "uuid";
 import { Schedule } from "../shared/types";
 
-const client = new SchedulerClient({ region: "us-west-2" });
+const client = new SchedulerClient({ region: process.env.AWS_REGION });
 
 export const handler = async (event: any) => {
+  console.log("Event", event);
+
   //For testing purposes
   if (event.test) {
     const scheduleName = `${event.area_name}_${uuid()}`;
@@ -22,6 +25,8 @@ export const handler = async (event: any) => {
   const areas: String[] = event.areas
     ? event.areas
     : JSON.parse(process.env.scheduleGroups!);
+
+  console.log("Areas to be looked up", areas);
 
   const schedules = await Promise.all(
     areas.map(async (area) => {
@@ -34,12 +39,16 @@ export const handler = async (event: any) => {
     })
   );
 
+  console.log("Events to be scheduled: before filter", schedules.flat().length);
+
   //Remove old schedules
   const filteredSchedules = schedules
     .flat()
     .filter((schedule) => isOneOrMoreHoursInFuture(schedule.start));
 
   if (filteredSchedules.length === 0) return console.log("No schedules...");
+
+  console.log("Events to be scheduled", filteredSchedules.length);
 
   const scheduleArns = await Promise.all(
     filteredSchedules.map((schedule) => {
@@ -71,6 +80,7 @@ const createSchedule = async (
       RoleArn: process.env.targetRoleArn,
       Input: JSON.stringify({ ...schedule, scheduleName }),
     },
+    ActionAfterCompletion: ActionAfterCompletion.DELETE,
   });
 
   const response = await client.send(command);
