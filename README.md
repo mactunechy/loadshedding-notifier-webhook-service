@@ -23,6 +23,9 @@ This product has a serverless archecture leveraging AWS services
 - When the Schedules in the  EventBridgeScheduler service have an `ActionAfterCompletion` set to `Delete`, meaning, when the schedule is dispatched to sqs, the schedule is deleted from the EventSchedulerService
 - At the end of the ProcessLambda execution, it checks whether there are still upcoming events in the EventBridgeScheduler. if Yes, execution completes, if no, ScheduleLambda is invoked from the ProcessLambda and the cycle repeats again.
 
+## Try it out
+Checkout the deloyed service at https://gridwatch-eight.vercel.app
+
 
 
 ## Edge Cases
